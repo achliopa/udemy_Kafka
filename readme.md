@@ -79,7 +79,7 @@
 * Gotchas:
     * Offset will have meaning only for a specific partition (e.g offset 2 in partition 0 does not represent the same data as offset 3 partition 1)
     * order is guaranteed only within a partition (not accross partitions)
-    * Data is kept only for limited time (default is 1 week) (offsets will keep incrementing, are not reset)
+    * Data is kept only for limited time (default is 1 week) (offsets will keep incrementing, they are not reset when data is deleted)
     * once data is written to a partition. it cant be changed (immutability)
     * data is assigned randomly to a partition unless a key is provided
 
