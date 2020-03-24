@@ -742,3 +742,34 @@ public class ConsumerDemoWithThreads {
         consumer.seek(partitionToReadFrom,offsetToReadFrom);
 ```
 * in the while loop we exit after reading 5 messages
+* assign and seek reads for the topic and partition we spec after the offset in our case 5 messages
+
+### Lecture 51. Client Bi-Directional Compatibility
+
+* as of kafka 0.10.2 our clients & Kafka Bokers have a capability called bi-directional compatibility (because API calls are now versioned)
+* an OLDER client (e.g v1.1) can talk to a NEWER Broker (e.g v2.0)
+* an NEWER client (e.g v2.0) can talk to a OLDER Broker (e.g v1.1)
+* Always use the latest client library version if we can [blog](https://www.confluent.io/blog/upgrading-apache-kafka-clients-just-got-easier/)
+
+## Section 8: ===== Kafka Real World Project =====
+
+### Lecture 53. Real World Project Overview
+
+* We will build a Kafka Producer that will read from twitter and publish to Kafka
+* Then we will write a consumer that reads from the Kafka topic and publishes to ElasticSearch
+
+### Lecture 54. Real World Exercise
+
+* Real-World Exercise: Before jumping to the next section for the solution, here are some pointers for some exercises:
+* Twitter Producer: The Twitter Producer gets data from Twitter based on some keywords and put them in a Kafka topic of your choice
+    * [Twitter Java Client](https://github.com/twitter/hbc)
+    * [Twitter API Credentials](https://developer.twitter.com/)
+* ElasticSearch Consumer: The ElasticSearch Consumer gets data from your twitter topic and inserts it into ElasticSearch
+    * [ElasticSearch Java Client](https://www.elastic.co/guide/en/elasticsearch/client/java-rest/6.4/java-rest-high.html)
+    * [ElasticSearch setup](https://www.elastic.co/guide/en/elasticsearch/reference/current/setup.html) or [Alternatively](https://bonsai.io/)
+
+## Section 9: Kafka Twitter Producer & Advanced Configurations
+
+### Lecture 56. Twitter Setup
+
+* 
