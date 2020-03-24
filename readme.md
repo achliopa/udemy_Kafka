@@ -274,4 +274,471 @@ Topic: first_topic	PartitionCount: 3	ReplicationFactor: 1	Configs: segment.bytes
 
 ### Lecture 35. Kafka Consumers in Group
 
-* 
+* we want to setup consumer group using the console consumer command using the --group option `kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic first_topic --group my-first-application`
+* the consumer works as normal listening to topic
+* if i open a new terminal with a cosole consumer in the same group if I publish to the topic i see that some messages go to the first consumer of the group and some to the second
+* this is because our topic is prtitioned and the partitions are enough for each consumer group member to attach to one of them. also i see that message is split 2:1 nd this is ok because 2 partitions go to one group member and one to the other
+* if i file 3 consumer group members and i publish to the topic i see round robin... as the messages go to partitions in round robin fashion.... an each member is attached to 1 partition
+* if i fire up 4 cosumer group members one is silent (idle) because there are not enough partitions for all
+* Reasignemtn of patitions is automatic and FASTTTT. AWESOME
+* if we fire up a consumer in another froup with the --from-beginning option we see all messages since beginning.... if i do the same in the first group that was purged nothing comes back. this is interesting
+* so conumer groups are treated as completely different queues from kafka topic and have their own consumer offsets. this is  why is GOOD offsets to be handled by Kafka
+
+### Lecture 36. Kafka Consumer Groups CLI
+
+* there is a cli command for consumer groups `kafka-consumer-groups.sh`
+* its for consumer group management but not creation. it needs the bootstrap-server to work
+* to list groups `kafka-consumer-groups.sh --bootstrap-server localhost:9092 --list`
+* we can describe with `kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group my-first-application --describe`
+* we see alot of info. consumer assignment to partitions. the current offset
+* lag info is a health metric. it means how much behind is the consummer offest from the log-end offset.
+* if we publish with no consumers listening the lag will increase... if we start again a consumer in the group we get buffered messages and the offsets to match (we dont need --from-beginning as when we dont use groups)
+
+### Lecture 37. Resetting Offsets
+
+* we want to be able to reget data from the topic.
+* this can be done by manipulating the offset (reseting)
+* we stop the consumers
+* we run the `kafka-consumer-groups.sh` command. --reset-offset acepts a lot if options regrding where to place the consumer offset. in ourcase we choose --to-earliest to get them from start 
+* we also need to spec the topic and force the reset with --execute `kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group my-first-application --topic first_topic --reset-offsets --to-earliest --execute`
+* if i now restart a group consumer i will get all the messages
+* instead of --to-earliest we can `--shift-by 2` to move 2 forward . we want to move backwards so we use `--shift-by -2`. we see that all partiitions consumer offset moves 2 messages back
+* note we cannot reset-offsets while we have active consumers in the group
+
+### Lecture 38. CLI Options that are good to know
+
+* Producer with keys `kafka-console-producer.sh --broker-list 127.0.0.1:9092 --topic first_topic --property parse.key=true --property key.separator=,`
+* in the console we must form key,value pairs `key,value`
+* Consumer with keys `kafka-console-consumer.sh --bootstrap-server 127.0.0.1:9092 --topic first_topic --from-beginning --property print.key=true --property key.separator=,` which gets `key,value` pairs
+
+### Lecture 39. What about UIs? Conduktor
+
+* Kafka is headless. no gui
+* Tutor has made his on [ConduktorUI](https://www.conduktor.io/)
+
+### Lecture 40. KafkaCat as a replacement for Kafka CLI
+
+* [Kafcat](https://github.com/edenhill/kafkacat) is an opensource alternative to CLI
+* read [this article](https://medium.com/@coderunner/debugging-with-kafkacat-df7851d21968) before using
+
+## Section 7: Kafka Java Programming 101
+
+### Lecture 42. Installing Java 8 & IntelliJ Community Edition
+
+* we must have Java 8 JDK on our machine
+* we install [install IntelliJ Community Edition](https://www.jetbrains.com/idea/download/#section=linux)
+* for this section we will work locally as we need to setup SFTP on EC2 instance to connect with Jetbrains to run our project on AWS EC2... not worth it..
+
+### Lecture 43. Creating Kafka Project
+
+* fire up IntelliJ IDEA 
+* create a new project
+* choose maven (package manager)
+* project SDK should be 1.8
+* click next
+* setup artifact coordinates
+    * groupid: io.github.achliopa
+    * artifactid: kafka-beginners-course
+    * version: 1.0
+* project name: kafka-beginners-course
+* click finish
+* in our project tree we see a file called 'pom.xml' it contains all code dependencies
+* we need to add kafka as dependency (kafka and logger)
+* we go to [maven kafka repo](https://mvnrepository.com/artifact/org.apache.kafka)
+* select kafka clients and get the proper version depnding on the kafka version we use in our case [2.4.1](https://mvnrepository.com/artifact/org.apache.kafka/kafka-clients/2.4.1)
+* we cp the maven dep artifact in the pom.xml <dependencies> tag
+* a pop up appears asking us to import changes. we select it.. if we miss it we can go to View=>Tool Windows => Maven and click the refresh button
+* we need to download an slf4j logger (sl4fj simple). in maven site (where we gor kfka-client) we typw slf4j-simple and click on [last stable version](https://mvnrepository.com/artifact/org.slf4j/slf4j-simple/1.7.30) and cp the maven artifact in pom.xml <dependencies> do auto import and compent out scope test
+* our total addition to pom.xml is the <dependencies> tag and whats inside it
+```
+    <version>1.0</version>
+...................
+    <dependencies>
+        <!-- https://mvnrepository.com/artifact/org.apache.kafka/kafka-clients -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>2.4.1</version>
+        </dependency>
+
+        <!-- https://mvnrepository.com/artifact/org.slf4j/slf4j-simple -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>1.7.30</version>
+<!--            <scope>test</scope>-->
+        </dependency>
+
+    </dependencies>
+...................
+</project>
+```
+
+* we ll do a hellow world app to test that all is ok and workinf
+* in our projecttree => src => main => java RCLICK new=> package and name it com.github.achliopa.kafka
+* RCLICK on it on prjecttree and new=>package com.github.achliopa.kafka.tutorial1
+* in it we add a javaclass (RCLICK => new=>JavaClass) and name it ProducerDemo
+* in the class at the source file use autocomplete to create a main method psvm+TAB
+* add a println
+```
+package com.github.achliopa.kafka.tutorial1;
+
+public class ProducerDemo {
+    public static void main(String[] args) {
+        System.out.println("hello world");
+    }
+}
+
+```
+* click play => run. we see hello world in console so all is OK
+
+### Lecture 44. Java Producer
+
+* we use our ProducerDemo class
+* we remove the println from  the main
+* first thing to create the Java Producer is to create producer properties
+* then we create the producer
+* then we send data
+* we instantiate a new Properties object `Properties properties = new Properties();`
+* with TAB it adds automatically the import `import java.util.Properties;`
+* to see what we need to pass in the PRoperties we go to [kafka docs](https://kafka.apache.org/documentation/#producerconfigs)
+* we pass them with settermethod using keyvalue pairs
+* we need to pass bootstrap-servers `properties.setProperty("bootstrap.servers","127.0.0.1:9092");`
+* then we need to pass key and value serializers. these help the producer know what kind of value we send to kafka and how it will be converted to bytes
+* kafka offers ready serializers for us (use TAB to import them in the file)
+```
+        properties.setProperty("key.serializer", StringSerializer.class.getName());
+        properties.setProperty("value.serializer",StringSerializer.class.getName());
+```
+
+* hardcoding property keys is oldschool we can use ProducerConfig.
+```
+ properties.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,bootstrapServers);
+        properties.setProperty(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        properties.setProperty(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,StringSerializer.class.getName());
+```
+
+* to create a producer we use a Kafka Producer class `KafkaProducer <String,String> producer = new KafkaProducer<String, String>(properties);`
+* <String,String> means that both key and value will be strings (therefore the serializers)
+* to send data we will use `producer.send();` it takes a ProducerRecord as input. we create it beforehand
+```
+ProducerRecord<String,String> record = new ProducerRecord<String, String>("first_topic","hello world");
+```
+
+* we pass in the topic and the value (no key). IntelliJ also gives us hints in code so we know what are the strings we pass
+* we can now send the record `producer.send(record);`
+* we start a console consumer to see if it will work `kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic first_topic -- group my-second-group`
+* run the code. we see nothing in consumer. why??? because  sending data is asynchronous
+* before the send completes the program exits....
+* to make sure data is send before we move on we use `producer.flush()` 
+* if we want to flush and close the producer (if we dont have anything to do more) `producer.close()`
+* our working code complete is
+```
+package com.github.achliopa.kafka.tutorial1;
+
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.protocol.types.Field;
+import org.apache.kafka.common.serialization.StringSerializer;
+
+import java.util.Properties;
+
+public class ProducerDemo {
+    public static void main(String[] args) {
+        // create Producer properties
+        Properties properties = new Properties();
+        String bootstrapServers = "127.0.0.1:9092";
+        properties.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,bootstrapServers);
+        properties.setProperty(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        properties.setProperty(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,StringSerializer.class.getName());
+        // create Producer
+        KafkaProducer<String,String> producer = new KafkaProducer<String, String>(properties);
+        // create a ProducerRecord
+        ProducerRecord<String,String> record = new ProducerRecord<String, String>("first_topic","hello world");
+        // send data
+        producer.send(record);
+        //flush and close
+        producer.close();
+    }
+}
+```
+
+### Lecture 45. Java Producer Callbacks
+
+* cp the sourcefile ProducerDemo and renameit ProducerDemoWithCallback
+* we will add a callback in send() to handle the async call
+* so apart from ProducerRecord we pass in a callback we write newCallback hit TAB and autocompete takes effect 
+* the event that will trigger it is onCompletion
+* it executes everytime a record is successfully send or we have an exception
+* we will use it to produce log based on recordMetadata (timestamp etc)
+* for this we need a org.slf4j.Logger object
+* we create a Logger for the class ` Logger logger = LoggerFactory.getLogger(ProducerDemoWithCallBack.class.getName());`
+* we run the code and see the log in the console
+* we put it in a for loop to send 10 messages
+* our send with the callback for logging + for loop is
+```
+        for(int i=0;i<10;i++){
+            // create a ProducerRecord
+            ProducerRecord<String,String> record = new ProducerRecord<String, String>("first_topic","hello world" + Integer.toString(i));
+            // send data - asynchronous
+            producer.send(record, new Callback() {
+                public void onCompletion(RecordMetadata recordMetadata, Exception e) {
+                    // executes every time a record is successfully sent or an exception is thrown
+                    if (e == null) {
+                        // the record was successfully sent
+                        logger.info("Received new metadata. \n"+
+                                "Topic: " + recordMetadata.topic() + "\n" +
+                                "Partition: " + recordMetadata.partition() + "\n" +
+                                "Offset: " + recordMetadata.offset() + "\n" +
+                                "Timestamp: " + recordMetadata.timestamp());
+                    } else {
+                        logger.error("Error while producing: " + e);
+                    }
+                }
+            });
+        }
+```
+
+* we have 3 partitions and use no keys, so we see that order is not kept as there is round robin but partition selection is arbitrary
+
+### Lecture 46. Java Producer with Keys
+
+* we duplicate the ProducerDemoWithCallBack as ProducerDemoKeys
+* we will mod the ProducerRecord instantiation to add the key
+```
+            String topic = "first_topic";
+            String value = "hello world " + Integer.toString(i);
+            String key = "id_" + Integer.toString(i%3);
+            ProducerRecord<String,String> record = new ProducerRecord<String, String>(topic,key,value);
+            // send data - asynchronous
+```
+
+* we expect the  messages with same key to go to the same partitions
+* to verify this behaviour we can do some things.
+* we can make the call synchronous (BAD BAD PRACTICE)
+* we chain .get() to send() and with Alt+ENTER we 'add exception to method signature'
+* what we did is block send to make it synchronous. so in the for loop one after the other
+* we run the code and see the log.. behaviour is confirmed
+    * key id_0 goes to partition 1
+    * key id_1 goes to partition 0
+    * key id_2 goes to partition 2
+
+### Lecture 46. Java Consumer
+
+* we create a new java class ConsumerDemo
+* we add a main and in it a Logger
+* we add properties. the properties for the consumer we can find in [kafka docs](https://kafka.apache.org/documentation/#consumerconfigs)
+* we use setters like in producer
+```
+  Properties properties = new Properties();
+        properties.setProperty(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,bootstrapServers);
+        properties.setProperty(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        properties.setProperty(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        properties.setProperty(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        properties.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,"earliest");
+```
+
+* the last property is to reset the offset it accepts earliest,latest or none
+    * earliest: recieve all messages in topic
+    * latest: receive only messages after the offset (unread)
+    * none: if offset not set throw error
+* we need
+    * create the consumer `KafkaConsumer<String,String> consumer = new KafkaConsumer<String, String>(properties);`
+    * subscribe to the topic(s), `consumer.subscribe(Collections.singleton(topic));`
+    * or to array of topics `consumer.subscribe(Arrays.asList(topic));`
+    * poll for data
+* we poll data in a while loop
+* we add the poll method with a timeout (ALT+ENTER to fix dependencies)
+* we also do log
+```
+while(true) {
+            ConsumerRecords<String,String> records = consumer.poll(Duration.ofMillis(100));
+
+            for (ConsumerRecord<String,String> record : records) {
+                logger.info("Key: " + record.key() + ", Value: " + record.value());
+                logger.info("Partitions: " + record.partition() + ", Offset: " + record.offset());
+            }
+        }
+```
+
+* we run the code. we see that consumer reads one partition after the other in order
+
+### Lecture 48. Java Consumer inside Consumer Group
+
+* we cp ConsumerDemo file to ConsumerDemoGroups
+* if we run again the code as is we will not get any messgae from the topic.
+* this is strange as we use Reset Offset earliest which is like --from-beginning
+* if we do a kafka-consumer-groups.sh CL command with --describe for this group we see 0 lag
+* if we want to read from beginneing we have to either reset group id or use a new one
+* we will show rebalance. we run two consumers from code at the same time
+* when we start the second consumer in the group we see in the log that the group is rebalancing
+* and we see a new partition assignment among consumers that we can confirm in --describe
+* to reassign consumers leave and rejoin the group
+
+### Lecture 49. Java Consumer with Threads
+
+* we want to get rid of the while loop
+* we cp the code file to ConsumerDemoWithThreads
+* we will use threads
+* outside of main we add `public class ConsumerThread implements Runnable` which complains
+* we need to add the default methods.. Alt+ENTER => implement Methods it adds run()
+* we also add a constructor and a shutdown()
+* in the constructor we pass a CountDownLatch object for concurrency
+* we put the while true loop in run
+* also we refctor the code moving propertis and KafkaConsumer in the contructor
+* in shutdown we run the wakeup() method
+```
+ public void shutdown() {
+            // the wakeup method is a special method to interrupt .poll()
+            // it will throw the WakeupException
+            consumer.wakeup();
+        }
+```
+
+* then we wrap the while() loop in a try/catch to catch this esception. when we catch it we log and then
+    * we `.close()` the consumer
+    * use `latch.countdown()` to tell main thread hs finished
+* we instantiate the runnable (thread) in main
+* to pass the latch in we need to move out the code in a separate method and call it from main or make latch static what we dont want
+* we create a thread from runnable and start it
+* also we add a shutdown hook to shutdown the runnable and errorhadling code
+* the complete code is
+```
+package com.github.achliopa.kafka.tutorial1;
+
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.errors.WakeupException;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.Properties;
+import java.util.concurrent.CountDownLatch;
+
+public class ConsumerDemoWithThreads {
+    public static void main(String[] args) {
+        new ConsumerDemoWithThreads().run();
+    }
+
+    private ConsumerDemoWithThreads() {
+
+    }
+
+    private void run(){
+        Logger logger = LoggerFactory.getLogger(ConsumerDemoWithThreads.class.getName());
+        String bootstrapServers = "127.0.0.1:9092";
+        String groupId = "my-fifth-application";
+        String topic = "first_topic";
+
+        // a latch for dealing with multiple threads
+        CountDownLatch latch = new CountDownLatch(1);
+
+        // create the consumer runnable
+        Runnable myConsumerRunnable = new ConsumerRunnable(
+                topic,
+                bootstrapServers,
+                groupId,
+                latch
+        );
+
+        // start the thread
+        Thread myThread = new Thread(myConsumerRunnable);
+        myThread.start();
+
+        // add a shutdown hook
+        Runtime.getRuntime().addShutdownHook(new Thread( () -> {
+            logger.info("Caught shutdown hook");
+            ((ConsumerRunnable) myConsumerRunnable).shutdown();
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            logger.info("application has exited");
+        }
+
+        ));
+
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            logger.error("Application got interrupted",e);
+        } finally {
+            logger.info("Application is closing");
+        }
+    }
+
+    public class ConsumerRunnable implements Runnable {
+
+        private Logger logger = LoggerFactory.getLogger(ConsumerRunnable.class.getName());
+        private CountDownLatch latch;
+        private KafkaConsumer<String,String> consumer;
+
+        public ConsumerRunnable(String topic, String bootstrapServers, String groupId, CountDownLatch latch){
+            this.latch = latch;
+            Properties properties = new Properties();
+            properties.setProperty(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,bootstrapServers);
+            properties.setProperty(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+            properties.setProperty(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+            properties.setProperty(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+            properties.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,"earliest");
+            consumer = new KafkaConsumer<String, String>(properties);
+            consumer.subscribe(Arrays.asList(topic));
+        }
+
+        @Override
+        public void run() {
+           try {
+               // poll for new data
+               while(true) {
+                   ConsumerRecords<String,String> records = consumer.poll(Duration.ofMillis(100));
+
+                   for (ConsumerRecord<String,String> record : records) {
+                       logger.info("Key: " + record.key() + ", Value: " + record.value());
+                       logger.info("Partitions: " + record.partition() + ", Offset: " + record.offset());
+                   }
+               }
+           } catch(WakeupException e) {
+                logger.info("Received shutdown signal");
+           } finally {
+               consumer.close();
+               // tell main code we are done with the consumer
+               latch.countDown();
+           }
+        }
+
+        public void shutdown() {
+            // the wakeup method is a special method to interrupt .poll()
+            // it will throw the WakeupException
+            consumer.wakeup();
+        }
+    }
+}
+```
+
+* we run the code. clear the console and hit exit
+
+### Lecture 50. Java Consumer Seek and Assign
+
+* we cp ConsumerDemo file as ConsumerDemoAssignSeek
+* Assign and Seek is another way of writing an app
+* we wont use the group id in the consumer
+* we will also wont subscribe to topics
+* assign and seek are mostly used to replay data or fetch a specific message
+* in assign we pass a collection of topic partitions and in seek the offset
+* so instead of subscribe to a topic we do
+```
+        //assign
+        TopicPartition partitionToReadFrom = new TopicPartition(topic, 0);
+        long offsetToReadFrom = 15L;
+        consumer.assign(Arrays.asList(partitionToReadFrom));
+        //seek
+        consumer.seek(partitionToReadFrom,offsetToReadFrom);
+```
+* in the while loop we exit after reading 5 messages
