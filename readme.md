@@ -772,4 +772,323 @@ public class ConsumerDemoWithThreads {
 
 ### Lecture 56. Twitter Setup
 
+* we need a [twitter developer](https://developer.twitter.com/) account (check)
+* we need to apply for it. it takes 2 weeks to get approved 
+* Once accepted login
+* click apps => create an app
+* give it a unique name "twitter_kafka_rt_feed_achliopa" and a description
+* give a url no need to put anything just a rationale (100 chars) and click Create
+* go to keys and tokens => create and access token/access token secret (safegurad them)
+* when we are done with the App we should regenerate API keys to block any unauthorized access
+* go to [github twitter java](https://github.com/twitter/hbc) which is a Java HTTP Client to Twitter Streaming API named HoseBird Client
+* in the Readme.md we see the Maven project dependeny. we cp it to pom.xml <dpendencies> in our project in IntelliJ
+```
+    <dependency>
+      <groupId>com.twitter</groupId>
+      <artifactId>hbc-core</artifactId> <!-- or hbc-twitter4j -->
+      <version>2.2.0</version> <!-- or whatever the latest version is -->
+    </dependency>
+```
+
+### Lecture 57. Producer Part 1 - Writing Twitter Client
+
+* in our project tree we click on java and New=>package and name it 'com.github.achliopa.kafka.tutorial2'
+* in it we create a new java class 'TwitterProducer'
+* we create a main (psvm+TAB) and a system.out.println to test run
+* in main we need to 
+    * create a twitter client
+    * create a kafka producer
+    * loop to send tweets to kafka
+* we refactor the class to a proper class with constructor run methods
+* we call the run from main
+* we add a method createTwitterClient()
+* we follow the Quickstart instructions from HBC
+    * setup the blocking queues
+    * we opt to follow term "kafka"
+    * we do all imports
+    * we set up the keys
+* we create the client again acording to docs
+* the complete create Twitter client create method is
+```
+    public Client createTwitterClient() {
+        /** Set up your blocking queues: Be sure to size these properly based on expected TPS of your stream */
+        BlockingQueue<String> msgQueue = new LinkedBlockingQueue<String>(100000);
+
+        /** Declare the host you want to connect to, the endpoint, and authentication (basic auth or oauth) */
+        Hosts hosebirdHosts = new HttpHosts(Constants.STREAM_HOST);
+        StatusesFilterEndpoint hosebirdEndpoint = new StatusesFilterEndpoint();
+        // Optional: set up some followings and track terms
+        List<String> terms = Lists.newArrayList("kafka");
+        hosebirdEndpoint.trackTerms(terms);
+
+        // These secrets should be read from a config file
+        Authentication hosebirdAuth = new OAuth1(consumerKey, consumerSecret, token, secret);
+
+        ClientBuilder builder = new ClientBuilder()
+                .name("Hosebird-Client-01")                              // optional: mainly for the logs
+                .hosts(hosebirdHosts)
+                .authentication(hosebirdAuth)
+                .endpoint(hosebirdEndpoint)
+                .processor(new StringDelimitedProcessor(msgQueue));
+
+        Client hosebirdClient = builder.build();
+        return hosebirdClient;
+    }
+```
+
+* the client will put the messages to the message queue
+* we refactor the method taking out the msgQueue and passing it as param
+* this is to have avaiable in the run() for kafka
+* we will just put a println to see if our code works outputting to the console
+* we also need a logger to log the message
+```
+        // on a different thread, or multiple different threads....
+        while (!client.isDone()) {
+            String msg = null;
+            try {
+                msg = msgQueue.poll(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                client.stop();
+            }
+            if(msg != null) {
+                logger.info(msg);
+            }
+```
+
+### Lecture 58. Producer Part 2 - Writing the Kafka Producer
+
+* we create the kafka producer like we did before
+* we create it in a separate function `createKafkaProducer()`
+```
+    public KafkaProducer<String,String> createKafkaProducer(){
+        String bootstrapServers = "127.0.0.1:9092";
+        // create Producer properties
+        Properties properties = new Properties();
+        properties.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,bootstrapServers);
+        properties.setProperty(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        properties.setProperty(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,StringSerializer.class.getName());
+        // create Producer
+        KafkaProducer<String,String> producer = new KafkaProducer<String, String>(properties);
+        return producer;
+    }
+```
+
+* in the while loop after logging the msg we send it to kafka
+```
+if(msg != null) {
+                logger.info(msg);
+                producer.send(new ProducerRecord<>("twitter_tweets",null,msg), new Callback(){
+                    @Override
+                    public void onCompletion(RecordMetadata recordMetadata, Exception e) {
+                        if(e != null){
+                            logger.error("Something bad happened: "+e);
+                        }
+                    }
+                });
+            }
+```
+
+* we go and create the topic in kafka `kafka-topics.sh --bootstrap-server localhost:9092 --topic twitter_tweets --create --partitions 6 --replication-factor 1`
+* we also fire up a console consumer to see the published tweets `kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic twitter_tweets`
+* we run the app and it works
+* we move out te terms in the class params together with the rest of the config
+* we will tweet about 'kafka' on our account to see that we receive the tweet in our kafka consumer!. IT WORKS
+* we will add a shutdown hook to exit gracefully when we shutdown our app from debugger
+```
+        //add a shutdown hook
+        Runtime.getRuntime().addShutdownHook(new Thread(()->{
+            logger.info("stopping application...");
+            logger.info("shuting down client from twitter...");
+            client.stop();
+            logger.info("closing producer...");
+            producer.close();
+            logger.info("done!");
+        })
+```
+
+### Lecture 59. Producer Configurations Introduction
+
+* when producer is created the config values are passed in the log
+* we ll see how to properly set them
+
+### Lecture 60. acks & min.insync.replicas
+
+* our app has acks=1
+* if acks=0 (no ack) then:
+    * no response is requested
+    * if broker goes offline or an exception happens we wont know and lose data
+    * its ok when we can afford to lose data (e.g metrics collection,log collection)
+* if acks=1 (leader ack) then:
+    * leader response is requested, but replication is not a guarantee (happens in background)
+    * if an ack is not received then producer may retry
+    * if the leader broker goes down before replica's replicate the data, we have data loss and leader ISRs are not synchronized
+* if acks=all (replicas ack) then:
+    * Leader+Replicas ack requested
+    * after leader gets acknoledgement from replicas for data replication it acknowledges to producer
+    * it adds latency and safety
+    * it guarantees no data loss if replicas are enough
+    * its a necessary if we dont want to lose data
+* acks=all MUSt be used in conjunction to `min.insync.replicas`
+* `min.insync.replicas` can be set at the broker or topic level (override)
+* `min.insync.replicas=2` implies that at least 2 brokers that are ISR (including leader) must respond that they have the data
+* that means tha if we use `replication.factor-3`,`min.insync.replicas=2`,`acks=all` we can only tolerate 1 broker going down, otherwise the producer will receive an exception (NOT_ENOGH_REPLICAS) on send
+
+### Lecture 61. retries, delivery.timeout.ms & max.in.flight.requests.per.connection
+
+* in case of transient failures, developers are expected to handle exceptions, otherwise the data will be lost
+* Example of transient failure
+    * NotEnoughReplicasException
+* There is a "retries" setting
+    * default is 0 for Kafka <= 2.0>
+    * defaults to 2147483647 times for Kafka >= 2.1
+* the `retry.backoff.ms`  setting is by default to 100ms (frequency of retry)
+* if retries > 0 for example retries = 2147483647
+* the producer wont try the request for ever, its bounded by a timeout
+* we can set an intuitive Producer Timeout (KIP-91 - Kafka 2.1)
+    * `delivery.timeout.ms` = 120000ms == 2min
+* Records will be failed if they can't be acknowledged in delivery.timeout.ms
+* WARNING: in case of retries, there is a chance that messages will be sent out of order (if a batch has failed to be sent)
+* if we rely on key based ordering this can be a big issue
+* for this we can set the setting while controls how many produce requests can be made in parallel `max.in.flight.requests.per.connection`
+    * Default: 5
+    * Set it to 1 if we want to ensure ordering (this may impact throughput)
+* If we use Kafka >=1.0.0 there is a better solution: Idempotent Producers
+
+### Lecture 62. Idempotent Producer
+
+* The problem: the Producer can introduce duplicate messages in Kafka due to network errors
+* Kafka sends the ack but Producer never gets it due to network error
+* pRoducer retries and there is a produce duplicate
+* With Idempotent Producer (Kafka >=0.11):
+    * it wont introduce duplicates on network error
+    * when producer retries it sends a request produce id. kafka broker sees its a duplicate request and does not commit it but sends an ack
+* Idempotent producers are great to guarantee a stable and safe pipeline
+* They come with:
+    * retries = Integer.MAX_VALUE(2^31-1 = 2147483647)
+    * `max.in.flight.requests`=1 (Kafka ==0.11) or
+    * `max.in.flight.requests`=5 (Kafka >= 1.0 -higher performance and keep ordering)
+    * `acks=all`
+* These settings are applied automatically after our producer has started if we don't set them manually
+* To use them set `producerProps.put("enable.idempotence",true)`
+
+### Lecture 63. Producer Part 3 - Safe Producer
+
+* if Kafka < 0.11
+    * `acks=all` (producer level) ensures data is properly replicated before an ack is received
+    * `min.insync.replicas=2` (broker/topic level) ensures two brokers in ISR at least have the data after an ack
+    * `retries=MAX_INT` (producer level) ensures transient errors are retried indefinitely
+    * `max.in.flight.requests.per.connection=1` (producer level) ensures only one request is tried at any time. preventing message re-ordering in case of retries (otherwise set to 5)
+* if Kafka >= 0.11
+    * `enable.idempotence=true` (producer level) + `min.insync.replicas=2` (broker/topic level)
+    * it implies `acks=all`,`retries=MAX_INT`,`max.in.flight.requests.per.connection=1` if Kafka 0.11 or 5 if Kafka >= 1.0
+    * while keeping ordering guarantees and improving performance
+* Running a "safe producer" might impact throughput and latency always test for your use case
+* go back to our running code log and see the config dump and all the settings
+```
+// create a safe producer
+        properties.setProperty(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG,"true");
+        properties.setProperty(ProducerConfig.ACKS_CONFIG,"all");
+        properties.setProperty(ProducerConfig.RETRIES_CONFIG,Integer.toString(Integer.MAX_VALUE));
+        properties.setProperty(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION,"5"); // kafka 2.0 >= 1.1 so we can keep this as 5, use 1 otherwise
+```
+
+* only the first prop s required. the rest is added explicitly for clarity
+* run again and check the log for config changes
+
+### Lecture 64. Producer Compression
+
+* Producer usually send data that is text-based, for example with JSON-data
+* in that case its paramount to apply compression to the producer
+* compression is enabled at the Producer level and doesn't require any configuration change in the Brokers or in the Consumers
+* `compression.type` can be `none` (default),`gzip`,`lz4`,`snappy`
+* compression is more effective the bigger the batch of message being sent to Kafka!
+* Benchmarks [here](https://blog.cloudflare.com/squeezing-the-firehose/)
+* a Producer sends a batch of messages if possible to save resources
+* before he sends the batch he compresses it
+* the compressed batch has following advantages
+    * much smaller producer request size (compression ration up to 4x)
+    * faster to transfer data over the network => less latency
+    * better throughput
+    * better disk utilization in Kafka (stored messages on disk are smaller)
+* disadvantages:
+    * producer must commit some CPU cycles to compression
+* overall:
+    * consider testing snappy or lz4 for optimal speeed/ compression ratio
+    * gzip has best compression but slower
+* find a compression algorithm that gives you the best performance for your specific data. test all of them
+* always use compression in prod, especially in high throughput
+* consider tweaking Producer Batching with `linger.ms` and `batch.size` to have bigger batches and therefore more compression and higher throughput
+
+### Lecture 65. Producer Batching
+
+* by default Kafka tries to send records as soon as possible
+    * it will have up to 5 requests in flight, meaning up to 5 messages individually sent at the same time
+    * after this, if more messages have to be sent while others are in flight, Kafka is smart and will start batching them while they wait to send them all at once
+* this smart batching allows Kafka to increase throughput while maintaining very low latency
+* batches have higher compression ratio so better efficiency
+* so how can we control the batching mechanism
+* `linger.ms` number of milliseconds a producer is willing to wait before sending a batch out (default 0)
+* by introducing some lag (for example `linger.ms=5`), we increase the chances of messages being sent together in a batch
+* at the expense of small delay, we can increase throughput, compression and efficiency of our producer
+* the max batch size allowed in a batch is `batch.size`. default is 16KB
+* increasing it to 32KB or even 64KB can help increae compression etc etc
+* any message bigger than the max batch size wont be batched
+* a batch is allocated per partition, so make sure that you dont set it to a number that is too high, otherwise we ll run waste memory
+* we can monitor the average batch size metric using Kafka Producer Metrics
+
+### Lecture 66. Producer Part 4 - High Throughput Producer
+
+* we'll add snappy message compression in our producer
+* snappy is very good if our messages are text based, e.g log lines or JSON docs
+* snappy is a good balance of CPU/compression ratio
+* we ll also increase `batch.size` to 32KB and introduce a small delay of 20ms `linger.ms`
+* its again a set of props setting
+```
+        // high throughput producer (at the expense of CPU usage and latency
+        properties.setProperty(ProducerConfig.COMPRESSION_TYPE_CONFIG,"snappy");
+        properties.setProperty(ProducerConfig.LINGER_MS_CONFIG,"20");
+        properties.setProperty(ProducerConfig.BATCH_SIZE_CONFIG,Integer.toString(32*1024));
+```
+* we change  term to "covid19" which is HOT these days as we are in a Pandemic Quarantine and twitter is on fire with this as watch
+* we see that consumer decompresses the messages and we see them as before and its FASTT
+
+### Lecture 67. Producer Default Partitions and Key Hashing
+
+* How keys are hashed
+* by default, our keys are hashed using the ["murmur2"](https://en.wikipedia.org/wiki/MurmurHash) algorithm
+* it is most likely preferred to not override the behavior of the partitioner, but it is possible to do so (`partitioner.class`)
+* target formula with the default partitioner `targetPartition = Utils.abs(Utils.murmur2(record.key()))%numpartitions;`
+* if we aposteriory add partitions to a topic it will SCREW the formula. DONT DO IT!!!
+
+### Lecture 68. [Advanced] max.block.ms and buffer.memory
+
+* if the producer produces faster than the broker can take, records will be buffered in memory
+* `buffer.memory`=33554452 (32MB) by default: the size of the send buffer at producer
+* that buffer will fill up over time and fill back down when the throughput to the broker increases
+* if buffer is full (all 32MB) then the send() method will start to block (wont return right away)
+* `max.block.ms`=60000: the time the .send() will block untill throwing an exception. Exception are basically thrown when:
+    * the producer has filled up its buffer
+    * the broker is not accepting any new data
+    * 60 seconds has elapsed
+* If we hit an exception hit that usually means our brokers are down or overloaded as they can't respond to requests
+
+### Lecture 69. Refactoring the Project
+
+* RCLICK to project(kafka-beginners-course) => New => Module (name=kafka-basics)
+* cp our package 'com.github.achliopa.kafka' and paste it in kafka-basics->src->main->java
+* delete tutorial2 from the new module
+* RCLICK to project(kafka-beginners-course) => New => Module (name=kafka-producer-twitter)
+* cp our package 'com.github.achliopa.kafka' and paste it in kafka-producer-twitter->src->main->java
+* delete tutorial1 from the new module
+* delete package 'com.github.achliopa.kafka'
+* modify pom.xml
+* cut the <dependencies> from the original package and paste it to the 2 new kafka-basics and kafka-producer-twitter
+* in kaka-basics we dont need twitter-client dependency so remove it
+* this is a decoupled project ready for the next step
+
+## Section 10: Kafka ElasticSearch Consumer & Advanced Configurations
+
+### Lecture 71. Setting up ElasticSearch in the Cloud
+
 * 
