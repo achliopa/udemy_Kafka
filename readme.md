@@ -1091,4 +1091,847 @@ if(msg != null) {
 
 ### Lecture 71. Setting up ElasticSearch in the Cloud
 
+* we can run elasticsearch locally or in AWS or use a hosted service like [bonsai](https://bonsai.io/)
+* we get a free 3node cluster 
+* it does not work so we will run locally for the project
+* we start elasticsearch and kibana locally
+
+### Lecture 72. ElasticSearch 101
+
+* we can use postman to fire up elasticsearch queries against our local installation or Kibana console
+* we send `GET /_cat/health?v` to see cluster health
+* we send `GET /_cat/nodes?v` to see node info
+* we send `GET /_cat/indices?v` to list indices
+* we create an index `PUT /twitter` with name twitter
+* we put a doc in our index named tweets with index 1 and JSON format
+```
+PUT twitter/tweets/1
+{
+  "course":"Kafka for Beginners",
+  "instructor":"Stephan",
+  "module":"elasticsearch"
+}
+```
+
+* we can get the tweet `GET /twitter/tweets/1`
+
+### Lecture 73. Consumer Part 1 - Setup Project
+
+* to connect to elasticsearch we need to add a maven dependency for RESTful API. we get it from [elastic.co](https://www.elastic.co/guide/en/elasticsearch/client/java-rest/current/java-rest-high-getting-started-maven.html)
+```
+<dependency>
+    <groupId>org.elasticsearch.client</groupId>
+    <artifactId>elasticsearch-rest-high-level-client</artifactId>
+    <version>7.6.1</version>
+</dependency>
+```
+* in IntelliJ we create a new=>module 'kafka-consumer-elasticsearch'
+* in its pom.xml file we add <dpendencies></dependencies> and put the elasticsearch restAPI dependency above
+* from the other projects in IDE pom.xml files we cp the kafka and logger depnedecies
+* we add a new package 'com.github.achliopa.kafka.tutorial3' in src=>main=>java of the module and add in it a new java class 'ElasticSearchConsumer'
+* we add a method to create the ES client
+```
+    public static RestHighLevelClient createClient() {
+        String hostname = "";
+        String username = "";
+        String password = "";
+
+        // dont do it if you run a local ES
+        final CredentialsProvider credentialsProvider = new BasicCredentialsProvider();
+        credentialsProvider.setCredentials(AuthScope.ANY,
+                new UsernamePasswordCredentials(username,password));
+
+        RestClientBuilder builder = RestClient.builder(
+                new HttpHost(hostname, 9200, "http" ))
+                .setHttpClientConfigCallback(new RestClientBuilder.HttpClientConfigCallback() {
+                    @Override
+                    public HttpAsyncClientBuilder customizeHttpClient(HttpAsyncClientBuilder httpClientBuilder) {
+                        return httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider);
+                    }
+                });
+
+        RestHighLevelClient client = new RestHighLevelClient(builder);
+        return client;
+    }
+```
+
+* in main() we create the client `RestHighLevelClient client = createClient();`
+* we use an IndexRequest to get an Index. we need index,type and id. also some Json content if its needed
+```
+        String jsonString = "{ \"foo\": \"bar\"}";
+
+        IndexRequest indexRequest = new IndexRequest(
+                "twitter",
+                "tweets"
+        ).source(jsonString, XContentType.JSON);
+```
+
+* this will fail if index does not exist
+* we run the request with
+```
+        IndexResponse indexResponse = client.index(indexRequest, RequestOptions.DEFAULT);
+        String id = indexResponse.getId();
+        logger.info(id);
+```
+
+* when we finish we must `client.close();`
+* we run the code. IT WORKS! id is 0A_qFXEBRsfJzUu4zomC
+* we confirm by cp the id returned in Kibana console issuing a `GET /twitter/tweets/0A_qFXEBRsfJzUu4zomC`
+
+### Lecture 74. Consumer Part 2 - Write the Consumer & Send to ElasticSearch
+
+* we want all data from our tweets topic in ES
+* we need a consumer.. we will use the ConsumerDemoGoups we have ready
+* we cp the setup code in a new static method
+```
+public static KafkaConsumer<String,String> createConsumer(){
+        String bootstrapServers = "127.0.0.1:9092";
+        String groupId = "kafka-demo-elasticsearch";
+        String topic = "twitter_tweets";
+        // create consumer configs
+        Properties properties = new Properties();
+        properties.setProperty(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG,bootstrapServers);
+        properties.setProperty(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        properties.setProperty(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        properties.setProperty(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        properties.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,"earliest");
+        // create consumer
+        KafkaConsumer<String,String> consumer = new KafkaConsumer<String, String>(properties);
+        return consumer;
+    }
+```
+
+* we add the while loop from ConsumerDemoGroups into main in the for loop we will insert data into ES
+* we will insert `record.value()`
+* the while loop
+```
+// poll for new data
+        while(true) {
+            ConsumerRecords<String,String> records = consumer.poll(Duration.ofMillis(100));
+
+            for (ConsumerRecord<String,String> record : records) {
+                // here we insert data into ES
+                String jsonString = record.value();
+
+                IndexRequest indexRequest = new IndexRequest(
+                        "twitter",
+                        "tweets"
+                ).source(jsonString, XContentType.JSON);
+
+                IndexResponse indexResponse = client.index(indexRequest, RequestOptions.DEFAULT);
+                String id = indexResponse.getId();
+                logger.info(id);
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+```
+
+* we run and it works
+
+### Lecture 75. Delivery Semantics for Consumers
+
+* At most once: offsets are committed as soon as the message batch is received. If the processing goes wrong, the message will be lost (it wont be read again)
+    * read batch
+    * committed offset
+    * process data (e.g send email)
+    * reads start from commit after restart
+* at least once: offsets are committed after the message is processed, if the processing goes wrong, the message will be read again. This can result in duplicate processing of messages. make sure the processing is "idempotent" (processing again the messages wont impact the system)
+    * reads batch
+    * process data (e.g upsert in DB)
+    * committed offset
+    * reads start from commit after restart
+* exactly once: only for Kafka => Kafka workflows using Kafka Streams API. For Kafka => Sink workflowsm use an idempotent consumer
+* Bottom like: for most applications we should use at least oce processing (we'll see in practice how to do it) and ensure your transformations / processing are idempotent
+
+### Lecture 76. Consumer Part 3 - Idempotence
+
+* we use at least one in our app. but in our for loop we dont care about duplicates.
+* so if something goes wrong in inserting to elasticsearch we will insert duplicates to ES
+* to make it idempotent we need to take control of indexing in ES as indexes are Unique
+* its simple as passing an id in the indexrequest bounded to the consumer offset `String id = record.topic() + "_" +record.partition() + "_" + record.offset();`
+* this is a nice generic approach
+* or we can have a twitter feed unique id
+* we will use the google java json lib [gson](https://mvnrepository.com/artifact/com.google.code.gson/gson/2.8.5) we insert the dependency to the pom.xml
+* we do it in a separate function
+```
+    private static JsonParser jsonParser = new JsonParser();
+
+    private static String extractIdFromTweet(String tweetJson){
+        // use gson lib
+        return jsonParser.parse(tweetJson)
+            .getAsJsonObject()
+            .get("id_str")
+            .getAsString();
+    }
+```
+* we run the code and confirm idempotence
+
+### Lecture 77. Consumer Poll Behaviour
+
+* Kafka Consumers have a "poll" model while many other messaging bus in enterprises have a "push" model
+* this allows consumers to control where in the log they want to consume and gives them ability to replay events
+* consumer polls for data and broker replies ASAP with data or empty after timeout
+* the polling behavious is controlled by:
+* `fetch.min.bytes` default is 1: 
+    * controls how much data we want to pull at least on each request
+    * helps improving throughput and decreasing request number
+    * at the cost of latency
+* `max.poll.records` default  500: 
+    * control how many records to receive per poll request (MAX)
+    * we can increase this if we have small messages and a lot of available RAM
+    * good to monitor how many records are polled per request and adjust
+* `Max.partitions.fetch.bytes` default is 1MB:
+    * max data returned by the broker per partition
+    * if we read from 100 partitions, we ll need hefty RAM (calc)
+* `Fetch.max.bytes` default 50MB:
+    * max data returned for each fetch request (covers all partitions)
+    * used when consumer does many fetches in parallel
+
+### Lecture 78. Consumer Offset Commit Strategies
+
+* there are two most common patterns to commiting offsets in a consumer app
+* (easy) `enable.auto.commit =  true` + synchronous processing of batches:
+    * with auto commit offsets will be committed automaticaly for us at regulat interval (`auto.commit.interval.ms` is 5000 by default) every time we call poll
+    * if we dont use synchronous codem we will be in at-most-once behaviour because offsets will be commited before our data is processed
+    * not recommended for beginners
+```
+while(true){
+    List<Records> batch = consumer.poll(Duration.ofMillis(100))
+    doSomethingSynchronus(batch)
+}
+```
+* (medium) `enable.auto.commit = false` + manual commit of offsets:
+    * we control when we commit offsets and whats the condition for commiting them
+    * example: accumulate records into a buffer and then flush the buffer to a DB + commit offsets them
+```
+while(true){
+    batch += consumer.poll(Duration.ofMillis(100))
+    if isReady(batch){
+        doSomethingSynchronous(batch)
+        consumer.commitSync();
+    }
+}
+```
+
+### Lecture 79. Consumer Part 4 - Manual Commit of Offsets
+
+* we will control the consumer offsets with a prop set `properties.setProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,"false"); //disable auto ofset commit`
+* we will also set max records in a batch `properties.setProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG,"10");`
+* afer we loop in the records received in the batch puting them in ES we commit the offsets using `consumer.commitSync();`
+* FIX: make sure to increase the fileds in index to avoid errors 
+```
+PUT twitter/_settings
+{
+  "index.mapping.total_fields.limit": 10000
+}
+```
+
+### Lecture 80. Consumer Part 5 - Performance Improvement using Batching
+
+* with current implementation we do one request per record in ES
+* we dont batch
+* we need a bulk request to bakend
+* before the loop of index requests we do a bulk request `BulkRequest bulkRequest = new BulkRequest();`
+* after we create tje indexrequests we dont send them but add them to bulk `bulkRequest.add(indexRequest);`
+* after the for loop we send the bulk request to ES `BulkResponse bulkResponse = client.bulk(bulkRequest,RequestOptions.DEFAULT);`
+* we increase batch to 100 in props to push it and get throughput
+* we fix a bug to commit records to ES only when we get records from Kafka
+
+### Lecture 81. Consumer Offsets Reset Behaviour
+
+* a consumer is expected to read from a log continuously
+* if consumer app has a bug it can go down
+* kafka has retention of 7 days . if consumer is down for >7 days offsets are invalid
+* consumer has  then to use:
+    * `auto.offset.reset=true` so it will read from the end of the log
+    * `auto.offset.reset=earliest` will read from the start of the log
+    * `auto.offset.reset=none` will throw exception if no offset is found
+* additionaly consumer offsets can be lost:
+    * if a consumer hasnt read new data in 1 day (kafka <2.0 )
+    * if a consumer hasnt read new data in 7 days (kafka >=2.0 )
+* this is controlled by the broker setting `offset.retention.minutes`
+* Replay data for consumers
+* to replay data for a consumer group
+    * take all consumers from a group down
+    * use kafka-consumer-groups to set offset to what we want
+    * restart consumers
+* Conclusion:
+    * set proper data retention period & offset retention period
+    * ensure the auto offset reset behaviour is the one we want
+    * use replay capablity in case of unexpected behaviour
+
+### Lecture 82. Consumer Part 6 - Replaying Data
+
+* to replay data we stop consumer app
+* then `kafka-consumer.groups.sh --bootstrap-server localhost:9092 --grop kafka-demo-elasticsearch --reset-offsets --topic twitter_tweets --execute --to-earliest`
+* this resets the consumer offset to start
+
+### Lecture 83. Consumer Internal Threads
+
+* say we have a consumer group with 3 consumers
+* each consumer starts a poll thread to the broker and a heartbeat thread to the ConsumerCoordinator acting Broker 
+* the heartbeat is control th poll is data
+* heartbeat enables to detect consumers that are down and does rebalance
+* to avoid issues consumers are encouradged to process data fast and poll often
+* Consumer Heartbeat Thread
+    * `session.timeout.ms` default 10sec
+    * heartbeats are sent periodicaly to broker
+    * if no heartbeat is sent during this periof consumer is considered dead
+    * set to lower for fast consumer rebalance
+    * `heartbeat.interval.ms` default 3sec
+    * how often to send heartbeats
+    * usually set to 1/3 of the `session.timeout.ms`
+* Consumer Poll Thread
+    * `max.poll.interval.ms` default 5min
+    * maximum amount of time between two .poll() calls before declaring the consumer dead
+    * this is particularly relevant for Big Data frameworks like Spark in case the processing takes time
+
+## Section 12: Kafka Extended APIs for Developers
+
+### Lecture 85. Kafka Connect Introduction
+
+* Kafka-Connect is all about code & connectors re-use
+* Why Kafka Connect and Streams?
+* Four common kafka use cases:
+    * Source => Kafka (ProducerAPI) : Kafka Connect Source
+    * Kafka => Kafka (Consumer,Producer API) : Kafka Streams
+    * Kafka => Sink (Consumer API) : Kafka Connect Sink
+    * KAfka => A00 (Consumer API)
+* Simplify and Improve getting data in and out of kafka
+* simplify transforming data within Kafka without relying on external libs
+* Why Kafka Connect?
+    * Programmers always want to import data from the same sources: DBs,JDBC,SAP HANA,BlockChain,Cassandra,MongoDB,Titter,IOT,FTP
+    * Programmers always want to store data in the same sinks: S3,ElasticSearch,HDFS,JDBC,SAP HANA,Cassandra,DynamoDB,HBase,Redis,mongoDB,
+* Don't reinvent the wheel
+* Connect Cluster stands between Sources and Kafka Cluster or between Kafka Cluster  and Sinks
+* Connect Cluster has Workers (much like Brokers)
+* Stream Apps input/output data to the Kafka Cluster 
+* Kafka COnnect high Level
+    * Source COnnectors to get data from Common Data Sources
+    * Sink Connectors to publish that data in Common Data Stores
+    * make it easy for non expert devs to quickly get their data reliable to Kafka
+    * Part of the ETL pipeline
+    * Scaling made easy from small pipelines to company-wide pipelines
+    * Re-usable code
+* [Connectors](https://www.confluent.io/hub/)
+
+### Lecture 86. Kafka Connect Twitter Hands-On
+
+* [Listo of Connectors](https://www.confluent.io/product/connectors-repository/) 
+* Confluent connectos are Oficial
+* Certidfied Connectors are Production Ready
+* Community Connectors are more experimental
+* we will use [Twitter Source Connector](https://github.com/jcustenborder/kafka-connect-twitter)
+* we see readme.md for instructions and config options
+* go to releases and get the last file. 
+* we want it portable so we dont get the .deb file but the zip with the jar files
+* we move it to IntelliJ workspace
+    * into top project add directory kafka-connect
+    * in it add folder connect
+    * in it folder kafka-connect-twitter
+    * drop there the extracted jars
+* to run the connector we use `connect-standalone.sh ` and we need to edit the connect-standalone.properties in config file. we cp it to the project and edit it adding `plugin.path=connectors`
+* we create in the project a twitter.properties file nd cp the props from github repo readme file
+* we pass in the credentials and some params
+```
+process.deletes=false
+filter.keywords=kafka
+kafka.status.topic=twitter_status_connect
+kafka.delete.topic=twitter_deletes_connect
+```
+
+* we create the 2 topics with
+```
+kafka-topics.sh --bootstrap-server localhost:9092 --topic twitter_status_connect --create --partitions 3 --replication-factor 1
+kafka-topics.sh --bootstrap-server localhost:9092 --topic twitter_delete_connect --create --partitions 3 --replication-factor 1
+```
+* we run a consumer on status topic `kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic twitter_status_connect --from-beginning`
+
+### Lecture 87. Kafka Streams Introduction
+
+* Say we want to do the following from the twitter_tweets topic
+    * filter only tweets that have over 10 likes or replies
+    * Count the number of tweets received for each hashtag every 1 min
+    * or combine both to get trending topics and hashtags in real time
+* With Kafka Producer and Consumer we can achieve that but it very low level and not easy
+* Kafka Streams
+    * Easy Data processing and transformation library within kafka
+    * Data transformation
+    * Data enrichment
+    * fraud detection
+    * monitoring and alert
+    * standard java app
+    * no need for separate cluster
+    * highly scalable, elastic and fault tolerant
+    * exactly once capabilities
+    * once record at a time processing (no batching)
+    * works for any application size
+    * they can take data from one or multiple topics and put it back to one or multiple topics
+* Serious Contender to Apache Spark / Flink or NiFi
+* Example: Tweets Filtering
+    * we want to filter tweets topic and put the results back to Kafka
+    * we basically want to chain a consumer with a producer
+    * Tweets Topic => Consumer => Application Logic => producer => Filtered Topic
+    * this is complicated and error prone especially if we deal with concurrency and error scenarios
+
+### Lecture 88. Kafka Streams Hands-On
+
+* we create a new module in our IntelliJ project called 'kafka-streams-filter-tweets'
+* in its pom.xml file we add <dependencies></<dependencies>
+* we go to [maven kafka streams](https://mvnrepository.com/artifact/org.apache.kafka/kafka-streams/2.4.1) and get dependency for our used kafka version
+* cp it in pom.xml
+* we cp slf4j dependency for logs from another project
+* we create a new package in src->main->java named 'com.github.achliopa.kafka.tutorial4'
+* in it we add a class StreamFilterTweets
+* we add a main. in it the steps we l take are:
+    * create properties
+    * create a topology
+    * build the topology
+    * start our streams application
+* we also add dependency for gson to parse JSON from tweet in the stream filter (take it from elasticsearch project)
+* also we cp the extract string from JSON method alter it to return followers count
+```
+private static Integer extractUserFollowersFromTweet(String tweetJson){
+        // use gson lib
+        try {
+            return jsonParser.parse(tweetJson)
+                    .getAsJsonObject()
+                    .get("user")
+                    .getAsJsonObject()
+                    .get("followers_count")
+                    .getAsInt();
+        } catch (NullPointerException e) {
+            return 0;
+        }
+    }
+```
+* the main method complete is
+```
+    public static void main(String[] args) {
+        //create properties
+        Properties properties = new Properties();
+        properties.setProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG,"127.0.0.1:9092");
+        properties.setProperty(StreamsConfig.APPLICATION_ID_CONFIG,"demo-kafka-streams");
+        properties.setProperty(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.StringSerde.class.getName());
+        properties.setProperty(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.StringSerde.class.getName());
+        //create a topology
+        StreamsBuilder streamsBuilder = new StreamsBuilder();
+        //input topic
+        KStream<String,String> inputTopic = streamsBuilder.stream("twitter_tweets");
+        KStream<String,String> filteredStream = inputTopic.filter(
+                // filter for tweets which has a user with over 10000 followers
+                (k,jsonTweet)-> extractUserFollowersFromTweet(jsonTweet) > 10000
+        );
+        filteredStream.to("important_tweets");
+        //build the topology
+        KafkaStreams kafkaStreams = new KafkaStreams(
+                streamsBuilder.build(),
+                properties
+        );
+        //start our streams application
+        kafkaStreams.start();
+    }
+```
+
+* we now have to create the topic `kafka-topics.sh --bootstrap-server localhost:9092 --topic important_tweets --create --partitions 3 --replication-factor 1`
+* we run the code also start our twitter producer and a console-consumer on important_tweets topic
+* It F@@@@ WORKS!!!!
+
+### Lecture 89. Kafka Schema Registry Introduction
+
+* kafka takes bytes as an input and publishes them (that why we need serializer/deserializer)
+* no data verifications
+* Τhe Need  for a schema registry
+    * what if the producer sends bad data
+    * what if a field gets renamed?
+    * what if the data format changes from one day to another?
+    * Consumers Break!!!
+* We need data to be self describable
+* We need to be able to evolve data without breaking downstream consumers
+* What if Kafka Brokers verified the messages they receive?
+    * that would break kafka efficiency
+    * kafka is just pass through
+* Kafka Schema Registry: 
+    * has to be a separate component
+    * Producers and Consumers need to be able to talk to it
+    * it must be able to reject data
+* a common data format must be agreed upon
+    * it needs to support schemas
+    * it needs to support evolution
+    * it needs to be lightweight
+* Confluent Schema Registry!! used Apache Avro as data format
+* Pipeline without Schema Registry: Source => Java Producer => Kafka =>java Consumer => Target System
+* Confulet Schema Registry Purpose
+    * Store and retrieve schemas for Producers/Consumers
+    * Enforce Backward/Forward compatibility on topics
+    * Decrease the size of payload
+* Producer sends Avro Content to Kafka
+* Producer sends Schema to Schema Registry
+* Consumer reads Avro Content from Kafka
+* Consumer gets Schema from Schema Registry
+* utilizing a schema has a lot of benefits
+* but it implies that we need to 
+    * set it up well
+    * make sure its higly available
+    * Partially change the producer and consumer code
+* Apache Avro  as a format is awesome but has a learning curve
+* Schema Registry is free but it takes time to setup
+* A talk about [Kafka APIs](https://medium.com/@stephane.maarek/the-kafka-api-battle-producer-vs-consumer-vs-kafka-connect-vs-kafka-streams-vs-ksql-ef584274c1e)
+
+## Section 13: Real World Insights and Case Studies (Big Data / Fast Data)
+
+### Lecture 91. Choosing Partition Count & Replication Factor
+
+* these are the most important params when creating atopic
+* they impact performance and durability of the system overall
+* its paramount to get the params right from first time
+    * if we change partition count after creation we break key ordering guarantee 
+    * if the replication factor increases during a topic lifecycle, we put more pressure on our cluster, which can lead to unexpected performance decrease (brokers should do more work)
+* Guess and TEST!!!!!
+* each partition can handle a throughput of a few MB/s (measure it for the setup)
+* more partitions: 
+    * better parallelism,better throughput, 
+    * ability to run more consumers in a group to scale
+    * ability to leverage more brokers if we end up with a large cluster
+    * BUT more elections to perform in Zookeeper
+    * BUT more files open in Kafka
+* Guidelines:
+    * partitions/topic = $$$$$ Question
+    * (intution) Small Cluster (<6 brokers): 2x #brokers
+    * (intuition) Big Cluster (>12 brokers): 1x #brokers
+    * adjust for #consumers we need to run in paralel at peak throughput (1 partition/consumer)
+    * adjust for producer throughput (increase if super-high throughput or projected increase in next 2 years) doe 3x #brokers
+    * replication factor should be at least 2 usually 3 at most 4
+* the higher the replication factor (N)
+    * better fault tolerance (N-1 brokers can fail)
+    * BUT more replication => higher latency if acks=all
+    * BUT more disk space on our system (50% more if RF is 3 than 2)
+* Guideline
+    * set it to 3 to get started (we need 3 brokers for it)
+    * if replication perforace is an issue , get a better machine instead of less RF
+    * NEVER SET IT TO 1 IN PRODUCTION
+* Cluster Guidelines
+    * it is pretty much accepted that a broker should not hold more than 2000 to 4000 partitions (across all topics)
+    * additionally a kafka cluster should have max 20000 partitions across all brokers
+    * why? when broker goes down zookeper stresses to perform leader elections
+    * if we need more partitions on the cluster. add brokers
+    * if we need more than 20000partitions?? do it like netflix and create more Kafka clusters
+
+### Lecture 92. Kafka Topics Naming Convention
+
+* Topic can have any names you want. It is very important to choose a naming convention in your company to maintain some kind of consistency.
+* read [this](https://riccomini.name/how-paint-bike-shed-kafka-topic-naming-conventions) for ideas
+
+### Lecture 93. Case Study - MovieFlix
+
+* Netflix Alter Ego
+* Reqs:
+    * users to resume video where they left off
+    * build user profile in no time
+    * recommend next show in RT
+    * store all data in analytics store
+* Kafka Cluster:
+* Topics:
+    * show_position: VideoPlayer (wihile playing) => Video Position Service (Producer) => show_posiiton (topic) => Resume Service (Consumer) => VideoPlayer (while starting)
+    * recommendations: show_posiiton => RecommendationsRTEngine(KafkaStreams) => recommendations => Recommendations Service (Consumer) => MoviesTVShowsPortal/Website
+    * show_position,recommendations => Analytics Consumer (KafkaConnect) => Analytics Store (Hadoop)
+* show_posiiton topic:
+    * can have multiple producers (massive)
+    * highly distributed if hogh_volume >30 partitions
+    * key selection, "user_id"
+* recommendation topic:
+    * kafka streams recommendation engine may source data from analytical store for historical training
+    * maybe low volume topic
+    * key, "user_id"
+
+### Lecture 94. Case Study - GetTaxi
+
+* UBER clone
+* Reqs:
+    * user should match with closeby driver
+    * prices should surge if number of drivers is low or num of users high
+    * store accurate posiition data in analyticsto calculate cost
+    * use kafka
+* Topics
+    * user_positioon: UserApp => UserPositionService(Producer) => user_position
+    * taxi_position:: TaxiDriverApp => TaxiPositionService(Producer) => taxi_position
+    * surge_pricing: user_positioon,taxi_position => SurgePricingComputationmodel(KafkaStreams)=> surge_pricing => TaxiCostService(Consumer)=>UserApp
+    * surge_pricing => Analytics consumer (kafka connect) => Analytics Store (Amazon S3)
+* user_positioon,taxi_position
+    * multiple producers
+    * highky distributed,high volume (>30partitions)
+    * keys "taxi_id","user_id"
+    * data epehemeral dont keep them long in kafka 
+* surge_pricing:
+    * computation of surge pricing comes from kafka streams
+    * surge pricing may be regional and therefore high volume
+    * other topics like "events" or "weather" might used from kafka streams app
+
+### Lecture 95. Case Study - MySocialMedia
+
+* CQRS (CommandQueryRequestSegregation) App - Instagram Clone
+* Reqs
+    * user to post,like and comment
+    * user to see total num of likes comments per post in RT
+    * high volume from day 1
+    * users should be able to see 'trending' posts
+    * kafka used
+* Topics
+    * posts: UserApp(userposts)=>postingservice(Producer) => posts
+    * likes: UserApp(userlikes)=>Like/Comment Service(Producer) => likes
+    * comments: UserApp(userComments)=>Like/Comment Service(Producer) => comments
+    * posts_with_counts: posts,likes,comments => Total Likes/Comments/Computation (Kafka Streams)=>posts_with_counts=>refresh feed service(consumer)=>website
+    * trending_posts:  posts,likes,comments => Trendingposts in last hour (Kafka Streams)=>trending posts => trending feed service (kafkaconnect)=>website
+* Responsibilities are segregated  so we call model CQRS
+* Posts: multiple produces,high volume highly distributed >30paritions, "user_id" key, high retention
+* Like/Comments: multiple produces,high volume highly distributed >100paritions, "post_id" key, high retention
+* Data in kafka should be formatted as events: user_123 created post_456 at 2pm
+
+### Lecture 96. Case Study - MyBank
+
+* digital bank
+* Reqs:
+    * alert user in case of large tranactions,fraud
+    * transction data already in db
+    * thresholds defined by users
+    * alerts in RT to users
+* Topics:
+    * bank_transactions: DB => Kafka Connect Source (CDC Connector - [Debezium](https://debezium.io/))=> bank_transactions
+    * user_settings: UserApp(thresholdsetting)=>AppThresholdService=>user_settings
+    * user_alerts: bank_transactions,user_settings=>RT big transactions detection(kafka_streams)=>user_alerts=>notification service(consumer)=>NotificationService
+* bank_transactions topic:
+    * kafka connect source is a great way to expose data from existing DB
+    * Tons of CDC available (shange data capture) for all DBs
+* Kafka Streams App:
+    * when user changes settigns alerts wont gen for past transactions
+* User_thresholds topics: its better to sent events to the topic: user 123 enabled threshold at $1200 at 12pm 12/12/23 than sending state to the user
+
+### Lecture 97. Case Study - Big Data Ingestion
+
+* it is common to have generic
+
+### Lecture 98. Case Study - Logging and Metrics Aggregation
+
+* it is common to have "generic" connectors or solutions to offload data from Kafka to HDFS,Amazon S3, ES for example
+* it is common to hve Kafka serve a "speed layer" for RT applications, while having a "slow layer" which helps with data ingestions into stores for later analytics
+* Kafka as a front to BigData Ingestion is a common pattern in BigData to provide an "ingestion buffer" in front of some stores
+* BigData Ingestion Architecture:
+    * Data Producers: App,Website,FinTech Systems,Email,DBs => Kafka
+    * Kafka => Spark/Storm/Flink => RT Analytics/Dashboards/Apps/Consumers
+    * Kafka => Kafka Connect => Hadoop/S3/RDBMS => Data Science/Reporting/Audit/Backup/ Storage
+
+### Lecture 98. Case Study - Logging and Metrics Aggregation
+
+* Applications sent logs to kafka topic and kafka connect sink sends it to SPlunk
+* same flow for metrics
+
+## Section 14: Kafka in the Enterprise for Admins
+
+### Lecture 99. Kafka Cluster Setup High Level Architecture Overview
+
+* we want multiple brokers in different data centers to distribute the load. we also want a cluster of at least 3 zookeper
+* in AWS:
+    * us-east-1a: zookeeper1,kafkaBroker1,kafkaBroker4
+    * us-east-1b: zookeeper2,kafkaBroker2,kafkaBroker5
+    * us-east-1c: zookeeper3,kafkaBroker3,kafkaBroker6
+* not easy to setup a cluster
+* we want to isolate zookeper and broker on different servers (predictable)
+* monitoring needs to be implemented
+* operations have to be mastered
+* really good kafka admin
+* option: KaaS(kafka as a service) pfferings on the web. no operational burden
+
+### Lecture 100. Kafka Monitoring & Operations
+
+* [Confluent](https://docs.confluent.io/current/kafka/monitoring.html)
+* [Kafka Monitoring and Operation](https://kafka.apache.org/documentation/#monitoring)
+* [Datadog Monitoring](https://www.datadoghq.com/blog/monitoring-kafka-performance-metrics/)
+* Kafka exposes metrics through JMX
+* Metrics are important to monitor, ensure proper behaviour
+* Common places to host Kafka Metrics
+    * ELK Stack
+    * Datadog
+    * Prometheus
+    * NewRelic
+    * Confluent ControlCenter
+* Important Metrics
+    * UnderReplicater Partitions: #partitions with problems with ISD. may indicate high load
+    * Request handlers: utilization of threads for IO,network overall use of Kafka broker
+    * Request Timing: latency in request reply
+* Kafka Operations must be able to do:
+    * rolling restart of brokers
+    * updating configurations
+    * rebalancing partitions
+    * increasing replication factor
+    * add a broker
+    * remove a broker
+    * replace a broker
+    * upgrade a kufka cluster with zero downtime
+
+### Lecture 101. Kafka Security
+
+* withoug security
+    * any client can access the cluster (authentication)
+    * clients can publish/cosume on any topic (authorization)
+    * all data sent visible on network (encryption)
+* Threats
+    * intercept data
+    * publish bad data/steal data
+    * delete topics
+* Encryption: secure data with SSL like HTTPS. on port 9093
+* Authentication: in Kafka only clients that prove identity connect to our Kafka Cluster. login
+    * SSL authentication (SSL Cert)
+    * SASL authentication (u/p) easy to hack
+    * Kerberos: Such as MS Acive Dir (strong -hard to setup)
+    * SCRAM: username/pasword (strong -medium difficulty)
+* Authorization: w/ authentication
+    * ACL (Access Control Lists) have to be maintained by admin
+* Best support for kafka Security for apps is Java
+* hard to implement
+
+### Lecture 102. Kafka Multi Cluster & MirrorMaker
+
+* [Kafka Mirror Maker](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=27846330)
+* [Mirror Maker Performance Tuning](https://engineering.salesforce.com/mirrormaker-performance-tuning-63afaed12c21)
+* [Confluent Replicator](https://docs.confluent.io/current/multi-dc-deployments/replicator/replicator-tuning.html#improving-network-utilization-of-a-connect-task)
+* [Kafka Mirror Maker Best Practice](https://community.cloudera.com/t5/Community-Articles/Kafka-Mirror-Maker-Best-Practices/ta-p/249269)
+* [Netflix talk on Kafka Replication](https://www.confluent.io/kafka-summit-sf17/multitenant-multicluster-and-hieracrchical-kafka-messaging-service/)
+* [Uber UReplicator](https://eng.uber.com/ureplicator-apache-kafka-replicator/)
+* [Multi DC Pros and Cons](https://www.altoros.com/blog/multi-cluster-deployment-options-for-apache-kafka-pros-and-cons/)
+* [OpenSource KafkaConnect replication](https://github.com/Comcast/MirrorTool-for-Kafka-Connect)
+* kafka can only operate well in a single region
+* therefore, it is very common for enterprises to have Kafka clusters across the world with some level of replication between them
+* a replication application at its core its just a cnsumer+producer
+* Tools to do it
+    * Mirror Maker - open source tool ships with kafka
+    * nteflix uses Flink. htey wrote their own app
+    * UBER uses uReplicator - addresses performance and operations issues with MirrorMaker
+    * Comcast has their own opensource Kafka Connect Source
+    * Confluent has their own Kafka Connect Source (paid)
+* 2 designs for cluster replications
+* active=>passive: 
+    * produces produse data in one cluster and replicated
+    * we have a global app
+    * we have global dataset
+* active=>active: 
+    * producers produce data to both clusters. 
+    * topics tag data on region
+    * we want to have an aggregation cluster (for analytics)
+    * desaster recovery strategy (hard)
+    * enable cloud migration: on-premise => cloud
+* Replicatiing does not preserve offsets just data
+
+### Lecture Section 16: Advanced Topics Configurations
+
+* [Topic Config](https://kafka.apache.org/documentation/#brokerconfigs)
+* Brokers have defaults for all the topic configuration parameters
+* These parameters impact performance and topic behaviour
+* Some topics many have special needs regarding
+    * replication factor
+    * #of partitions
+    * message size
+    * compression level
+    * log cleanup policy
+    * min insync replicas
+    * other configurations
+* create topic `kafka-topics.sh --bootstrap-server localhost:9092 --create --topic configured-topic --partitions 3 --replication-factor 1`
+* we use kafka-config t0 describe the config for a topic `kafka-configs.sh --zookeeper localhost:2181 --entity-type topics --entity-name configured-topic --describe`
+* we use `--add-config` passing key value pairs. use `kafka-config.sh` to see them all
+* instead of `--describe` we use `--add-config min.insync.replicas=2 --alter` to alter
+* to delete `--delete-config min.insync.replicas --alter`
+
+### Lecture 105. Segment and Indexes
+
+* topics are made of partitions
+* parttions made of segments(file)
+* only one segemnt is ACTIVE (the one data is written to)
+* 2 segment settings
+    * `log.segment.bytes` the max size of a single segment in bytes
+    * `log.segment.ms` the time Kafka will wait before committing the segemnt if not full
+* segments come with 2 indexes(files)
+    * an offset to position index: allows kafka where to read to find a message
+    * a timestamp to offset index: allows Kafka to find mesage with timestamp
+* Therefore, Kafka shows where to find data in a constant time
+* we can see the files in the dat/kafka folder where kafka outputs each partition in a folder
+```
+-rw-r--r--  1 achliopa achliopa 10485760 Mar 27 15:39 00000000000000000000.index
+-rw-r--r--  1 achliopa achliopa  2999679 Mar 26 22:36 00000000000000000000.log
+-rw-r--r--  1 achliopa achliopa 10485756 Mar 27 15:39 00000000000000000000.timeindex
+-rw-r--r--  1 achliopa achliopa      240 Mar 27 00:22 00000000000000001283.snapshot
+-rw-r--r--  1 achliopa achliopa        8 Mar 27 15:39 leader-epoch-checkpoint
+```
+* a smaller `log.segment.bytes` (default 1GB) means. 
+    * more segments per partition
+    * log compaction happens more often
+    * BUT Kafka has to keep more files opened (Too many open files)
+* Question: how fast will I have new segemnts based on throughputs
+* a smaller `log.segment.ms` (time is default 1 week) means:
+    * we set a max freq for log compaction (more triggers)
+
+### Lecture 106. Log Cleanup Policies
+
+* many kafka clusters make data expire, accorsing to a policy
+* this is called log cleanup
+* Policy1: `log.cleanup.policy=delete` kafka default for all user topics
+    * Delete based on aget of data (default is 1 week)
+    * Delete based on max size of log (default is -1==infinite)
+* with `kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic __consumer_offset` we look at policy
+* Policy 2: `log.cleanup.policy=compact` kafka default for __consumer_offset
+    * delete based on keys of our messages
+* Deleting data from kafka allows us to:
+    * Control the size of the data on the disk, delete obsolete data
+    * Overall: limit mainetnace work on the Cluster
+* How often does log cleanup happen?
+    * log cleanup happens happens on our parttions segments
+    * smaller/more segments means that log cleanup will happen more often
+    * log cleanup should not happen too often +> takes up CPU and RAM
+    * cleaner checks for work every 15 secs `log.cleaner.backoff.ms`
+
+### Lecture 107. Log Cleanup Delete
+
+* `lof.retention.hours` number of hours to keep data for (default is 168 = 1 week)
+    * higher number means more disk space
+    * lower number means less data is retained (if our consumers are down too long they can miss data)
+* `log.retention.bytes` max size in bytes for each partition (default is -1 infinite)
+    * old segemtn will be deleted based on time or space rules
+    * new data is written to the active segment
+* 2 common pair of options
+    * `lof.retention.hours=168` and `log.retention.bytes=-1` for 1 week of retention
+    * `lof.retention.hours=17520` and `log.retention.bytes=524288000` for 500MB of data retention
+
+### Lecture 108. Log Compaction Theory
+
+* Log compaction ensures that the log contains at least the last known value for a specific key in a partition
+* very  useful if we just require a SNAPSHOT instead of full history (such as for a data table in a DB)
+* the idea is that we only keep the latest update for a key in our log
+* our topic is: employee-salaray
+* we want to keep the most recent salaray for our employees
+    * if there is no upadated val for a key val pair in the last segment what happens when the onld segnemtn is deleted?
+* any consumer reading from the tail of a log (most current data) will still see all the messages sent to the topic
+    * ordering of messages is kept, log compaction only removes some messages, does not reorder them
+    * the offset of a message is imutable (if never changes) Offsets are just skipped if a message is missing
+    * deleted records can still be seen by consumers for a period of `delete.retention.ms` default is 24hrs
+* Myth Busting
+* log compacting doesnt prevent us from pushing duplicate data to Kafka
+    * de-duplication is done after a segment is commited
+    * your consumers will still read from tail as soon as the data arrives
+* it doesnt prevent you from reading duplicate data from kafka
+    * same points at above
+* log compactions can fail from time to time
+    * its an optimization and the compaction thread might crash
+    * make sure we assign enough memory to it and that it gets triggered
+    * restart kafka if log compaction is broken (this is a bug and it may be fixed in future)
+* We cant trigger Log Compaction using an API call (for now)
+* Log compaction goes to all the old segments apaprt from active one and compacts them to one leaving keys untouched
+* log compaction is confifured by `log.cleanup.policy=compact`
+    * `segment.ms` *default 7days max amount to wait to close active segments
+    * `segment.bytes` default 1G max size of a segment
+    * `min.compaction.lag.ms` default 0 how long to wait before a message can be compacted
+
+### Lecture 108. Log Compaction Theory
+
 * 
