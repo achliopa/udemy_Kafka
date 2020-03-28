@@ -1932,6 +1932,120 @@ private static Integer extractUserFollowersFromTweet(String tweetJson){
     * `segment.bytes` default 1G max size of a segment
     * `min.compaction.lag.ms` default 0 how long to wait before a message can be compacted
 
-### Lecture 108. Log Compaction Theory
+### Lecture 109. Log Compaction Practice
+https://postimg.cc/0z1kZsfj
+* our topic is "employee-salary"
+* we want to keep the most recent salary of our employees
+    * delete old segments
+    * keep from old segments only records that are not updated in the active segment
+* we create a topic with compaction enabled.we choose one partition to trigger batching `kafka-topics.sh --bootstrap-server localhost:9092 --create --topic employee-salary --partitions 1 --replication-factor 1 --config cleanup.policy=compact --config min.cleanable.dirty.ratio=0.001 --config segment.ms=5000`
+* ratio is such so that compaction happens all the time. a sensible val is 0.1
+* also 5000 means that every 5 sec we will have a new segment so we will trigger compaction
+* we do a describe to confirm that the topic is properly configured `kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic employee-salary `
+* we check the kafka server log
+* we start a console consumer to print key value paris`kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic employee-salary --from-beginning --property print.key=true --property key.separator=,`
+* we create a produces for key value pairs `kafka-console-producer.sh --broker-list localhost:9092 --topic employee-salary --property parse.key=true --property key.separator=,`
+* we add some data
+```
+Mark,salary: 10000
+Lucy,salary: 20000
+Bob,salary: 15000
+Patrick,salary: 30000
+```
 
-* 
+* we go to '/data/kafka/employee-salaray-0/' and see some deleted files so compaction is taking place
+* we update some values
+```
+Mark,salary: 50000
+Bob,salary: 10000
+```
+
+* if we restart consumer we see that we get only the updated values (log is compacted efery 5sec)
+* we get only latest updated vals for each key SWEET
+
+### Lecture 110. min.insync.replicas reminder
+
+* `acks=all` must be used in conjunction with `min.insync.replicas`
+* `min.insync.replicas` can be set at broker or topic level (override)
+* we use `kafka-config.sh` as we ve seen using `--add-config`
+* or we can mod the 'server.properties' file for broker level
+
+### Lecture 111. Unclean Leader Election
+
+* if all our ISRs (In Sync Replicas) die we have the following option
+    * wait for ISR to come back
+    * enable `unclean.leader.election=true` and start producing to non ISR partitions. THIS IS DANGEROUS. we improve availability  but we lose data because other messages on ISRs will be discarded
+    * overall this is very dangerous setting and must be aware of it before enabling it
+* Use cases include: metrics collection, log collection and other cases where data loss is somewhat acceptale, at the tradeoff of availablitity 
+
+### Lecture 114. Starting Kafka with the Confluent CLI
+
+* got to the Confluent site and use their cli (alternative to vanilla kafka) if you feel like
+
+### Lecture 115. Starting a multi broker Kafka Cluster using Binaries
+
+* to spawn multiple kafka brokers on owr machine we cp the server.properties file from /config
+* we cp it to server0.properties,server1.properties and server2.properties
+* we edit server1.properties and set `broker.id=1` and the output to be in data/kafka1. also we uncomment listeners and set it to port 9093
+* we edit server2.properties and set `broker.id=2` and the output to be in data/kafka2. also we uncomment listeners and set it to port 9094
+* we create these 2 new folders
+* we fire up zookeper anf 3 kafka serverss with `kafka-server-start.sh` passing in the server0 1 and 2 files
+* we create a new topic with 6 partitions and 3 replications `kafka-topics.sh --bootstrap-server localhost:9092 --topic many-reps --create --partitions 6 --replication-factor 3`
+* in consumers and producers we can set to which brokers we want to connect `kafka-console-producer.sh --broker-list 127.0.0.1:9092,127.0.0.1:9093,127.0.0.1:9094 --topic many-reps`
+* even if we connect to one broker its the same as if we connect to all of them because our message is replicated
+* also in consumer we can use bootstrap-server any of the 3
+
+### Lecture 116. Note on Docker Setup
+
+* [kafka stack on docker](https://github.com/simplesteph/kafka-stack-docker-compose)
+* [install docker](https://hub.docker.com/search?type=edition&offering=community)
+
+### Lecture 117. Start Kafka Development environment using Docker
+
+* with docker installed
+* `export DOCKER_HOST_IP=127.0.0.1`
+* we use sudo for commands below
+* we start docker and use `docker-compose -f zk-single-kafka-single.yml up` to fire up a cluster
+* to stop `docker-compose -f zk-single-kafka-single.yml stop` and `docker-compose -f zk-single-kafka-single.yml down`
+* all commands there are as normal cli
+
+### Lecture 118. Starting a multi broker Kafka Cluster using Docker
+
+* we use sudo for commands below
+* we start docker and use `docker-compose -f zk-multiple-kafka-multiple.yml up` to fire up a cluster
+* to stop `docker-compose -f zk-multiple-kafka-multiple.yml stop` and `docker-compose -f zk-multiple-kafka-multiple.yml down`
+* all commands there are as normal cli
+
+### Lecture 119. Kafka Advertised Host Setting
+
+* Advertised hostname is the most important setting in Kafka
+* Example Kafka Broker 1
+    * Public IP: 34.56.78.90
+    * Private IP: 172.31.9.1
+    * ADV_HOST=172.31.9.1
+* Kafka Client says: i want to connect using public IP => server replies (use my advertised hostname first and gives the IP 172.31.9.1)
+* Client uses the private Ip. if he is on the same private network OK. if not cant find IP
+* if the broker uses ADV_HOST=localhost the client will try to connect on the local machne. if the broker is there fine if not wont be able to connect
+* if broker uses ADV_HOST its publicIp client can connect from everywhere
+* If we use PublicIP but after rebooting kafka Ip  changes??
+* The setting for `advertised.listeners`: if our clients are in the private network set
+    * the internal private IP
+    * the internal private DNS hostname
+    * our clients should be able to resolve both (assuming static IP)
+* If clients are on public network,set"
+    * external public IP
+    * external public DNS hostname pointing to the public IP
+
+### Lecture 120. Starting Kafka on a Remote Machine
+
+* fire up an AWS EC2 t2.micro opening port 9092 and 22 
+* we need to use the public IP to connect 
+* ssh in it
+* install kafka, java 1.9
+* `export KAFKA_HEAP_OPTS="Xmx256M -Xms128M"`
+* start zoekeper in deamon mode `zookeeper-server-start.sh --daemon config/zokeper.properties`
+* start kafka
+* on our local machine we start producer and consumer using AWS instance public IP
+* it does not work
+* in server.properties on AWS instance kafka broker config we edit `advertised.listeners=PLAINTEXT://<PUBLICIP>:9092`
+* It works!!!
